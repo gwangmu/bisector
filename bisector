@@ -12,8 +12,77 @@ run() {
   eval "$1" >> /tmp/run.bis 2>&1
 }
 
-rm -f /tmp/run.bis
+do_test() {
+  SKIPPED=0
 
+  info "commit: $(git rev-parse HEAD)"
+  info "reconfiguring..."
+
+  if [[ -f 'autogen.sh' ]]; then
+    run "./autogen.sh"
+  elif [[ -f 'configure.ac' ]]; then
+    run "autoreconf -vfi"
+  elif [[ ! -f 'configure' ]]; then
+    error "how do I configure?"
+    git reset --hard > /dev/null 2>&1
+    git bisect skip
+    SKIPPED=1
+  fi
+
+  info "configuring..."
+
+  run "./configure CFLAGS=\"-fsanitize=address -g\" \
+    CXXFLAGS=\"-fsanitize=address -g\" \
+    LDFLAGS=\"-fsanitize=address -g\""
+
+  if [[ $? != 0 ]]; then
+    error "configure failed?"
+    git reset --hard > /dev/null 2>&1
+    git bisect skip
+    SKIPPED=1
+  elif [[ ! -f 'Makefile' ]]; then
+    error "no Makefile detected."
+    git reset --hard > /dev/null 2>&1
+    git bisect skip
+    SKIPPED=1
+  fi
+
+  info "building..."
+
+  run "make -j"
+
+  if [[ $? != 0 ]]; then
+    error "make failed."
+    git reset --hard > /dev/null 2>&1
+    git bisect skip
+    SKIPPED=1
+  fi
+
+  info "running..."
+
+  cp $POC .poc.input
+  $CMD > /tmp/bisect_dump.bis 2>&1
+}
+
+test_bug() {
+  if [[ -n $(grep $BUG_TYPE /tmp/bisect_dump.bis) ]] && \
+    [[ -n $(grep $CRASH_FUNC /tmp/bisect_dump.bis) ]]; then
+    info "bad"
+    CODE=1
+  else
+    info "gud"
+    CODE=0
+  fi
+}
+
+cleanup_bisect() {
+  rm -f bad.bis good.bis FIRSTBAD
+}
+
+
+# Initialize
+
+rm -f /tmp/run.bis
 
 if [[ -z $1 ]] && [[ -f BISECT ]]; then
   BISECT=$(cat BISECT)
@@ -24,17 +93,12 @@ if [[ -z $1 ]] && [[ -f BISECT ]]; then
 
   BAD_COMMIT=$(echo "$BISECT" | awk '{ print $1 }')
   GOOD_COMMIT=$(echo "$BISECT" | awk '{ print $2 }')
-  CMD=$(cut -d' ' -f4- BISECT)
-elif [[ -n $4 ]]; then
-  BAD_COMMIT=$1
-  GOOD_COMMIT=$2
-  shift
-  shift
-  shift
-  CMD="$@"
+  POC=$(echo "$BISECT" | awk '{ print $3 }')
+  CMD=$(cat BISECT | tail -1 | cut -d' ' -f5-)
+  CMD=$(echo "$CMD" | sed 's/@@/.poc.input/g')
 else
-  error "usage: $0 <bad_commit> <good_commit> -- <poc_cmd>"
-  error "usage: (no argument - read argument through the BISECT file)"
+  error "usage: $0"
+  error "usage: (read argument through the BISECT file)"
   exit
 fi
 
@@ -43,7 +107,9 @@ if [[ -z "$CMD" ]]; then
   exit
 fi
 
+
 info "'$BAD_COMMIT' to '$GOOD_COMMIT'..."
+info "poc input: $POC"
 info "poc command: $CMD"
 
 
@@ -60,43 +126,10 @@ if [[ $? != 0 ]]; then
 fi
 
 
-if [[ -f 'autogen.sh' ]]; then
-  run "./autogen.sh"
-elif [[ -f 'configure.ac' ]]; then
-  run "autoreconf -vfi"
-elif [[ ! -f 'configure' ]]; then
-  error "how do I configure?"
-  exit
-fi
+do_test
 
-
-ASAN_FLAGS="-fsanitize=address -g"
-
-run "./configure CFLAGS=\"$ASAN_FLAGS\" CXXFLAGS=\"$ASAN_FLAGS\" \
-  LDFLAGS=\"$ASAN_FLAGS\""
-
-if [[ $? != 0 ]]; then
-  error "configure failed?"
-  exit
-elif [[ ! -f 'Makefile' ]]; then
-  error "no Makefile detected."
-  exit
-fi
-
-
-run "make -j"
-
-if [[ $? != 0 ]]; then
-  error "make failed."
-  exit
-fi
-
-
-INIT_DUMP="/tmp/init_dump.bis"
-
-eval "$CMD > $INIT_DUMP 2>&1"
-
-if [[ -z "grep AddressSanitizer $INIT_DUMP" ]]; then
+if [[ -z "grep AddressSanitizer /tmp/bisect_dump.bis" ]] && \
+  [[ -z "grep Assertion /tmp/bisect_dump.bis" ]]; then
   error "bad commit ($BAD_COMMIT) is not bad."
   exit
 fi
@@ -105,7 +138,17 @@ fi
 # Extract: bug type, crashing function name
 
 while read LINE; do
-  if [[ -n $(echo $LINE | grep AddressSanitizer) ]]; then
+  if [[ -n $(echo $LINE | grep Assertion) ]]; then
+    BUG_TYPE=Assertion
+
+    for WORD in $LINE; do
+      if [[ $WORD == "Assertion" ]]; then
+        break
+      else
+        CRASH_FUNC=${WORD%:}
+      fi
+    done
+  elif [[ -n $(echo $LINE | grep AddressSanitizer) ]]; then
     BUG_TYPE=
 
     if [[ $(echo $LINE | grep SEGV) ]]; then
@@ -114,11 +157,10 @@ while read LINE; do
       BUG_TYPE=SIGFPE
     else
       for WORD in $LINE; do
-        if [[ $_ON_DET == "1" ]]; then
-          BUG_TYPE=$WORD
+        if [[ $WORD == "on" ]]; then
           break
-        elif [[ $WORD == "on" ]]; then
-          _ON_DET=1
+        else
+          BUG_TYPE=$WORD
         fi
       done
     fi
@@ -133,22 +175,23 @@ while read LINE; do
     HEAD=$(echo $LINE | awk '{ print $1 }')
     if [[ ${HEAD:0:1} == '#' ]]; then
       if [[ -z $(echo $LINE | grep 'asan') ]] && \
-        [[ -z $(echo $LINE | grep 'sanitizer') ]]; then
+        [[ -z $(echo $LINE | grep 'sanitizer') ]] && \
+        [[ -z $(echo $LINE | grep 'libc') ]]; then
         CRASH_FUNC=$(echo $LINE | awk '{ print $4 }')
         break
       fi
     fi
   fi
-done < $INIT_DUMP
+done < /tmp/bisect_dump.bis 
+
+
+info "bug_type: $BUG_TYPE"
+info "crash_func: $CRASH_FUNC"
 
 if [[ -z "$BUG_TYPE" ]] || [[ -z "$CRASH_FUNC" ]]; then
   error "bug_type or crash_func not found."
   exit
 fi
-
-
-info "bug_type: $BUG_TYPE"
-info "crash_func: $CRASH_FUNC"
 
 git reset --hard
 
@@ -158,66 +201,26 @@ git reset --hard
 git bisect start $BAD_COMMIT $GOOD_COMMIT
 
 while true; do
-  if [[ -n $(git bisect log | tail -1 | grep success) ]]; then
+  if [[ -n $(git bisect log | tail -1 | grep "first bad commit") ]]; then
     break
   fi
 
-  info "commit: $(git rev-parse HEAD)"
-  info "reconfiguring..."
-
-  if [[ -f 'autogen.sh' ]]; then
-    run "./autogen.sh"
-  elif [[ -f 'configure.ac' ]]; then
-    run "autoreconf -vfi"
-  elif [[ ! -f 'configure' ]]; then
-    error "how do I configure?"
-    git reset --hard > /dev/null 2>&1
-    git bisect skip
-  fi
-
-  info "configuring..."
-
-  run "./configure CFLAGS=\"-fsanitize=address -g\" \
-    CXXFLAGS=\"-fsanitize=address -g\" \
-    LDFLAGS=\"-fsanitize=address -g\""
-
-  if [[ $? != 0 ]]; then
-    error "configure failed?"
-    git reset --hard > /dev/null 2>&1
-    git bisect skip
-    continue
-  elif [[ ! -f 'Makefile' ]]; then
-    error "no Makefile detected."
-    git reset --hard > /dev/null 2>&1
-    git bisect skip
+  do_test
+  
+  if [[ $SKIPPED == 1 ]]; then
     continue
   fi
 
-  info "building..."
+  test_bug
 
-  run "make -j"
+  make clean > /dev/null 2>&1
 
-  if [[ $? != 0 ]]; then
-    error "make failed."
-    git reset --hard > /dev/null 2>&1
-    git bisect skip
-    continue
-  fi
-
-  info "running..."
-
-  $CMD > /tmp/bisect_dump.bis 2>&1
-
-  if [[ -n $(grep $BUG_TYPE /tmp/bisect_dump.bis) ]] && \
-    [[ -n $(grep $CRASH_FUNC /tmp/bisect_dump.bis) ]]; then
-    info "bad"
-    CODE=1
-  else
-    info "gud"
-    CODE=0
-  fi
-
-  git reset --hard > /dev/null 2>&1
+  mv BISECT /tmp
+  mv "$POC" /tmp
+  rm -rf *
+  git checkout .
+  mv /tmp/BISECT .
+  mv /tmp/"$POC" .
 
   if [[ $CODE == 0 ]]; then
     git bisect good
@@ -228,3 +231,39 @@ done
 
 
 git bisect reset bisect/bad 
+
+
+# Verification
+
+git reset --hard
+do_test
+cp /tmp/bisect_dump.bis bad.bis
+echo $(git rev-parse HEAD) >> bad.bis
+test_bug
+
+if [[ $CODE != 1 ]]; then
+  cleanup_bisect
+  error "cannot find a bad commit."
+  exit
+fi
+
+git reset --hard
+git checkout HEAD~
+do_test
+cp /tmp/bisect_dump.bis good.bis
+echo $(git rev-parse HEAD) >> good.bis
+test_bug
+
+if [[ $CODE != 0 ]]; then
+  cleanup_bisect
+  error "not a first bad commit."
+  exit
+fi
+
+
+git reset --hard
+git checkout HEAD@{1}
+
+echo $(git rev-parse HEAD) > FIRSTBAD
+
+info "first bad commit: $(git rev-parse HEAD)"
