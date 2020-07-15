@@ -97,6 +97,6 @@ c0733844461ceb1b05f41968c1d962480f0db5f6
   * Divide-by-zero (SIGFPE)
   * Null dereference (SIGSEGV)
   * Assertion
-* This script only test whether a bug persists or not with the bug type and the crashing function.
+* This script only tests whether a bug persists or not with the bug type and the crashing function.
 
 **Random contribution very much welcomed.**
