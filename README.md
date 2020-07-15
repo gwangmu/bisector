@@ -48,6 +48,7 @@ $ cd libtiff
 ```
 $ curl http://bugzilla.maptools.org/attachment.cgi?id=601 > POC
 ```
+The PoC input is provided by http://bugzilla.maptools.org/show_bug.cgi?id=2500.
 
 1. Place a `BISECT` file.
 
