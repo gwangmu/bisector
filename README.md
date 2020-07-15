@@ -1,5 +1,5 @@
 # bisector
-Git bisection utility for memory corruption bugs that requires nothing but one script.
+A single-script git bisection utility wrapper for memory corruption bugs.
 
 ## Introduction
 
