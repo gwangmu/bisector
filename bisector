@@ -179,7 +179,7 @@ git bisect reset > /dev/null 2>&1
 git checkout $BAD_COMMIT --force > /dev/null 2>&1
 
 if [[ $? != 0 ]]; then
-  error "cannot checkout the bad commit."
+  error "cannot checkout '$BAD_COMMIT'(bad)."
   exit
 fi
 
@@ -188,7 +188,7 @@ do_test
 
 if [[ -z "grep AddressSanitizer $DUMP_FILE" ]] && \
   [[ -z "grep Assertion $DUMP_FILE" ]]; then
-  error "bad commit ($BAD_COMMIT) is not bad."
+  error "'$BAD_COMMIT' is not actually bad."
   exit
 fi
 
@@ -260,7 +260,7 @@ git bisect reset > /dev/null 2>&1
 git checkout $GOOD_COMMIT --force > /dev/null 2>&1
 
 if [[ $? != 0 ]]; then
-  error "cannot checkout the bad commit."
+  error "cannot checkout '$GOOD_COMMIT'(good)."
   exit
 fi
 
@@ -292,6 +292,7 @@ while [[ -z $(git bisect log | tail -1 | grep "first bad commit") ]]; do
     git bisect bad > /dev/null 2>&1
   else
     error "internal: obscure TESTCODE '$TESTCODE'."
+    exit
   fi
 done
 
@@ -322,7 +323,7 @@ echo $(git rev-parse HEAD) >> good.bis
 
 if [[ $TESTCODE != 0 ]]; then
   cleanup_bisect
-  error "not a first bad commit. maybe '$GOOD_COMMIT' is not actually good."
+  error "not the first bad commit. maybe '$GOOD_COMMIT' is not actually good."
   exit
 fi
 
