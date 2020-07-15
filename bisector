@@ -276,10 +276,7 @@ while [[ -z $(git bisect log | tail -1 | grep "first bad commit") ]]; do
   do_test
   if [[ $SKIPPED == 1 ]]; then continue; fi
 
-  mv BISECT "$POC" /tmp
-  rm -rf *
-  git checkout . > /dev/null 2>&1
-  mv /tmp/BISECT /tmp/"$POC" .
+  git reset --hard > /dev/null 2>&1
 
   if [[ $TESTCODE == 0 ]]; then
     git bisect good > /dev/null 2>&1
