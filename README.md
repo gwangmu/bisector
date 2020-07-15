@@ -92,5 +92,5 @@ c0733844461ceb1b05f41968c1d962480f0db5f6
 ## Future Work
 
 * Currently supports `configure` only.
-* Supported bug types include: ASAN-detected memory corruptions, divide-by-zero (SIGFPE), null dereference (SIGSEGV).
+* Supported bug types include: ASAN-detectable memory corruptions, divide-by-zero (SIGFPE), null dereference (SIGSEGV).
 * Random contribution very welcomed.
