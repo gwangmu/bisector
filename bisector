@@ -49,10 +49,12 @@ do_test() {
   elif [[ -f 'configure.ac' ]]; then
     run "autoreconf -vfi"
   elif [[ ! -f 'configure' ]]; then
-    error "how do I configure?"
+    for i in {1..18}; do printf "\b"; done
+    printf "Unconfigurable    \n"
     git reset --hard > /dev/null 2>&1
     git bisect skip > /dev/null 2>&1
     SKIPPED=1
+    return
   fi
 
   # Configure
@@ -64,15 +66,19 @@ do_test() {
     LDFLAGS=\"-fsanitize=address -g\""
 
   if [[ $? != 0 ]]; then
-    error "configure failed?"
+    for i in {1..18}; do printf "\b"; done
+    printf "Skipped           \n"
     git reset --hard > /dev/null 2>&1
     git bisect skip > /dev/null 2>&1
     SKIPPED=1
+    return
   elif [[ ! -f 'Makefile' ]]; then
-    error "no Makefile detected."
+    for i in {1..18}; do printf "\b"; done
+    printf "Skipped           \n"
     git reset --hard > /dev/null 2>&1
     git bisect skip > /dev/null 2>&1
     SKIPPED=1
+    return
   fi
 
   # Build
@@ -82,10 +88,12 @@ do_test() {
   run "make -j"
 
   if [[ $? != 0 ]]; then
-    error "make failed."
+    for i in {1..18}; do printf "\b"; done
+    printf "Skipped           \n"
     git reset --hard > /dev/null 2>&1
     git bisect skip > /dev/null 2>&1
     SKIPPED=1
+    return
   fi
 
   # Run
