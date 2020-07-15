@@ -1,22 +1,48 @@
 #!/bin/bash
 
+RUN_LOG="/tmp/run.bis"
+DUMP_FILE="/tmp/bisect_dump.bis"
+
+
+# Debug functions
+
+actn() {
+  printf "[*] $1" | tee -a $RUN_LOG
+}
+
+act() {
+  echo "[*] $1" | tee -a $RUN_LOG
+}
+
 info() {
-  echo "info: $1" | tee -a /tmp/run.bis
+  echo " +  $1" | tee -a $RUN_LOG
 }
 
 error() {
-  echo "error: $1" | tee -a /tmp/run.bis
+  echo "[-] error: $1" | tee -a $RUN_LOG
 }
 
 run() {
-  eval "$1" >> /tmp/run.bis 2>&1
+  eval "$1" >> $RUN_LOG 2>&1
 }
+
+
+# Test functions
 
 do_test() {
   SKIPPED=0
+  TESTCODE=-1
 
-  info "commit: $(git rev-parse HEAD)"
-  info "reconfiguring..."
+  _CUR_COMMIT=$(git rev-parse HEAD)
+  actn "Testing commit '${_CUR_COMMIT:0:8}'... "
+
+  if [[ -z $(git bisect log 2>&1 | grep "not bisecting") ]]; then
+    _REM_COMMIT=$(git bisect visualize --oneline | wc -l)
+    printf "($_REM_COMMIT remaining) "
+  fi
+
+  # Reconfigure
+  printf "(1/4: Reconfigure)"
 
   if [[ -f 'autogen.sh' ]]; then
     run "./autogen.sh"
@@ -25,11 +51,13 @@ do_test() {
   elif [[ ! -f 'configure' ]]; then
     error "how do I configure?"
     git reset --hard > /dev/null 2>&1
-    git bisect skip
+    git bisect skip > /dev/null 2>&1
     SKIPPED=1
   fi
 
-  info "configuring..."
+  # Configure
+  for i in {1..18}; do printf "\b"; done
+  printf "(2/4: Configure)  "
 
   run "./configure CFLAGS=\"-fsanitize=address -g\" \
     CXXFLAGS=\"-fsanitize=address -g\" \
@@ -38,51 +66,70 @@ do_test() {
   if [[ $? != 0 ]]; then
     error "configure failed?"
     git reset --hard > /dev/null 2>&1
-    git bisect skip
+    git bisect skip > /dev/null 2>&1
     SKIPPED=1
   elif [[ ! -f 'Makefile' ]]; then
     error "no Makefile detected."
     git reset --hard > /dev/null 2>&1
-    git bisect skip
+    git bisect skip > /dev/null 2>&1
     SKIPPED=1
   fi
 
-  info "building..."
+  # Build
+  for i in {1..18}; do printf "\b"; done
+  printf "(3/4: Build)      "
 
   run "make -j"
 
   if [[ $? != 0 ]]; then
     error "make failed."
     git reset --hard > /dev/null 2>&1
-    git bisect skip
+    git bisect skip > /dev/null 2>&1
     SKIPPED=1
   fi
 
-  info "running..."
+  # Run
+  for i in {1..18}; do printf "\b"; done
+  printf "(4/4: Run)        "
 
   cp $POC .poc.input
-  $CMD > /tmp/bisect_dump.bis 2>&1
+  $CMD > $DUMP_FILE 2>&1
+
+  for i in {1..18}; do printf "\b"; done
+
+  if [[ -n $BUG_TYPE ]] && [[ -n $CRASH_FUNC ]]; then
+    if [[ -n $(grep $BUG_TYPE $DUMP_FILE) ]] && \
+      [[ -n $(grep $CRASH_FUNC $DUMP_FILE) ]]; then
+      printf "Bad               "
+      TESTCODE=1
+    else
+      printf "Good              "
+      TESTCODE=0
+    fi
+  else
+    printf "                  "
+  fi
+
+  printf "\n"
 }
 
-test_bug() {
-  if [[ -n $(grep $BUG_TYPE /tmp/bisect_dump.bis) ]] && \
-    [[ -n $(grep $CRASH_FUNC /tmp/bisect_dump.bis) ]]; then
-    info "bad"
-    CODE=1
-  else
-    info "gud"
-    CODE=0
-  fi
+
+# Auxiliary functions
+
+cleanup_log() {
+  rm -f $RUN_LOG $DUMP_FILE
 }
 
 cleanup_bisect() {
-  rm -f bad.bis good.bis FIRSTBAD
+  rm -f bad.bis good.bis run.bis FIRSTBAD
 }
 
 
 # Initialize
 
-rm -f /tmp/run.bis
+act "Initializing..."
+
+cleanup_log
 
 if [[ -z $1 ]] && [[ -f BISECT ]]; then
   BISECT=$(cat BISECT)
@@ -95,7 +142,6 @@ if [[ -z $1 ]] && [[ -f BISECT ]]; then
   GOOD_COMMIT=$(echo "$BISECT" | awk '{ print $2 }')
   POC=$(echo "$BISECT" | awk '{ print $3 }')
   CMD=$(cat BISECT | tail -1 | cut -d' ' -f5-)
-  CMD=$(echo "$CMD" | sed 's/@@/.poc.input/g')
 else
   error "usage: $0"
   error "usage: (read argument through the BISECT file)"
@@ -108,17 +154,21 @@ if [[ -z "$CMD" ]]; then
 fi
 
 
-info "'$BAD_COMMIT' to '$GOOD_COMMIT'..."
-info "poc input: $POC"
-info "poc command: $CMD"
+info "Commit range: '$BAD_COMMIT'(bad) to '$GOOD_COMMIT'(good)"
+info "PoC input: $POC"
+info "PoC command: $CMD"
+
+
+CMD=$(echo "$CMD" | sed 's/@@/.poc.input/g')
 
 
 # Initial ASAN dump
 
-info "generating the most recent ASAN dump..."
+act "Generating most recent ASAN dump..."
 
-
-git checkout $BAD_COMMIT --force
+git reset --hard > /dev/null 2>&1
+git bisect reset > /dev/null 2>&1
+git checkout $BAD_COMMIT --force > /dev/null 2>&1
 
 if [[ $? != 0 ]]; then
   error "cannot checkout the bad commit."
@@ -128,8 +178,8 @@ fi
 
 do_test
 
-if [[ -z "grep AddressSanitizer /tmp/bisect_dump.bis" ]] && \
-  [[ -z "grep Assertion /tmp/bisect_dump.bis" ]]; then
+if [[ -z "grep AddressSanitizer $DUMP_FILE" ]] && \
+  [[ -z "grep Assertion $DUMP_FILE" ]]; then
   error "bad commit ($BAD_COMMIT) is not bad."
   exit
 fi
@@ -182,88 +232,104 @@ while read LINE; do
       fi
     fi
   fi
-done < /tmp/bisect_dump.bis 
+done < $DUMP_FILE 
 
-
-info "bug_type: $BUG_TYPE"
-info "crash_func: $CRASH_FUNC"
+info "Bug type: $BUG_TYPE"
+info "Crash function: $CRASH_FUNC"
 
 if [[ -z "$BUG_TYPE" ]] || [[ -z "$CRASH_FUNC" ]]; then
-  error "bug_type or crash_func not found."
+  error "bug type or crash function is not found."
   exit
 fi
 
-git reset --hard
+
+# Verify good commit
+
+act "Verifying good commit..."
+
+git reset --hard > /dev/null 2>&1
+git bisect reset > /dev/null 2>&1
+git checkout $GOOD_COMMIT --force > /dev/null 2>&1
+
+if [[ $? != 0 ]]; then
+  error "cannot checkout the bad commit."
+  exit
+fi
+
+do_test
+
+if [[ $TESTCODE == 1 ]]; then
+  error "'$GOOD_COMMIT' is not actually good."
+  exit
+fi
 
 
-# Begin bisect
+# Do bisect
 
-git bisect start $BAD_COMMIT $GOOD_COMMIT
+act "Bisecting..."
 
-while true; do
-  if [[ -n $(git bisect log | tail -1 | grep "first bad commit") ]]; then
-    break
-  fi
+git reset --hard > /dev/null 2>&1
+git checkout origin/master --force > /dev/null 2>&1
+git bisect start $BAD_COMMIT $GOOD_COMMIT > /dev/null 2>&1
 
+while [[ -z $(git bisect log | tail -1 | grep "first bad commit") ]]; do
   do_test
-  
-  if [[ $SKIPPED == 1 ]]; then
-    continue
-  fi
+  if [[ $SKIPPED == 1 ]]; then continue; fi
 
-  test_bug
-
-  make clean > /dev/null 2>&1
-
-  mv BISECT /tmp
-  mv "$POC" /tmp
+  mv BISECT "$POC" /tmp
   rm -rf *
-  git checkout .
-  mv /tmp/BISECT .
-  mv /tmp/"$POC" .
+  git checkout . > /dev/null 2>&1
+  mv /tmp/BISECT /tmp/"$POC" .
 
-  if [[ $CODE == 0 ]]; then
-    git bisect good
+  if [[ $TESTCODE == 0 ]]; then
+    git bisect good > /dev/null 2>&1
+  elif [[ $TESTCODE == 1 ]]; then
+    git bisect bad > /dev/null 2>&1
   else
-    git bisect bad
+    error "internal: obscure TESTCODE '$TESTCODE'."
   fi
 done
 
 
-git bisect reset bisect/bad 
+git bisect reset bisect/bad > /dev/null 2>&1
 
 
 # Verification
 
-git reset --hard
-do_test
-cp /tmp/bisect_dump.bis bad.bis
-echo $(git rev-parse HEAD) >> bad.bis
-test_bug
+act "Verifying..."
 
-if [[ $CODE != 1 ]]; then
+git reset --hard > /dev/null 2>&1
+do_test
+cp $DUMP_FILE bad.bis
+echo $(git rev-parse HEAD) >> bad.bis
+
+if [[ $TESTCODE != 1 ]]; then
   cleanup_bisect
   error "cannot find a bad commit."
   exit
 fi
 
-git reset --hard
-git checkout HEAD~
+git reset --hard > /dev/null 2>&1
+git checkout HEAD~ > /dev/null 2>&1
 do_test
-cp /tmp/bisect_dump.bis good.bis
+cp $DUMP_FILE good.bis
 echo $(git rev-parse HEAD) >> good.bis
-test_bug
 
-if [[ $CODE != 0 ]]; then
+if [[ $TESTCODE != 0 ]]; then
   cleanup_bisect
-  error "not a first bad commit."
+  error "not a first bad commit. maybe '$GOOD_COMMIT' is not actually good."
   exit
 fi
 
+mv $RUN_LOG run.bis 
 
-git reset --hard
-git checkout HEAD@{1}
+
+git reset --hard > /dev/null 2>&1
+git checkout HEAD@{1} > /dev/null 2>&1
 
 echo $(git rev-parse HEAD) > FIRSTBAD
 
-info "first bad commit: $(git rev-parse HEAD)"
+
+info "First bad commit: $(git rev-parse HEAD) (see FIRSTBAD)"
+info "{Last-good, First-bad} ASAN log: {good, bad}.bis"
+info "All done!"
