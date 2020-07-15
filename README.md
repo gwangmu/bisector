@@ -99,4 +99,4 @@ c0733844461ceb1b05f41968c1d962480f0db5f6
   * Assertion
 * This script tests a bug by identifying the bug type and the crashing function in the ASAN dump; it does not recognize whether the bug manifests in another commit with a different bug type or at a different function.
 
-**Random contribution would be very much welcomed.**
+**Random contribution would be very much appreciated.**
