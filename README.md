@@ -36,16 +36,11 @@ $ ./bisector
 
 ## Example: CVE-2016-3658 in libtiff 4.0.6
 
-0. Clone `libtiff` and move to the project directory.
+0. Prepare `libtiff` itself and the PoC input.
 
 ```
 $ git clone https://gitlab.com/libtiff/libtiff.git libtiff
 $ cd libtiff
-```
-
-00. Prepare the PoC input as `POC`.
-
-```
 $ curl http://bugzilla.maptools.org/attachment.cgi?id=601 > POC
 ```
 The PoC input is provided by http://bugzilla.maptools.org/show_bug.cgi?id=2500.
